@@ -1,6 +1,14 @@
 /**
  * Interactive Shader Playground
  * Based on "Rocaille" shader by @XorDev
+ * 
+ * Loop Period Math:
+ * The shader animation is driven by: sin(... + t) where t = iTime * iSpeed
+ * Since sin() has period 2π, the animation loops when t increases by 2π
+ * Therefore: loop_duration = 2π / speed seconds
+ * 
+ * This is consistent across all variations because they all use the same
+ * time parameter 't' inside their sine functions.
  */
 
 const vertexShaderSource = `#version 300 es
@@ -34,11 +42,11 @@ void main() {
 `;
 
     // Variation-specific loop logic
+    // All variations use 't' in their sine functions, so loop period = 2π/speed
     let loopCode;
 
     switch (variation) {
         case 'rocaille':
-            // Original Rocaille - swirling plasma
             loopCode = `
     for (float i = 0.0; i < iIterations; i++) {
         vec2 v = p;
@@ -51,11 +59,9 @@ void main() {
             break;
 
         case 'liquid':
-            // Liquid Oil - smoother, broader shapes
             loopCode = `
     for (float i = 0.0; i < iIterations; i++) {
         vec2 v = p;
-        // Single frequency wave instead of multi-frequency
         v += sin(v.yx * 3.0 + i + t) * 0.5 / iWarpStrength;
         v += sin(v.yx * 1.5 + i + t) * 0.3 / iWarpStrength;
         col += (cos(i + iColorPhase + vec4(0.0, 1.0, 2.0, 3.0)) + 1.0) / 6.0 / pow(length(v), iGlowSharpness);
@@ -64,14 +70,12 @@ void main() {
             break;
 
         case 'electric':
-            // Electric Grid - Manhattan distance creates diamond shapes
             loopCode = `
     for (float i = 0.0; i < iIterations; i++) {
         vec2 v = p;
         for (float f = 1.0; f < 10.0; f++) {
             v += sin(v.yx * f + i + iResolution + t) / (f * iWarpStrength);
         }
-        // Manhattan distance instead of Euclidean
         float dist = abs(v.x) + abs(v.y);
         col += (cos(i + iColorPhase + vec4(0.0, 1.0, 2.0, 3.0)) + 1.0) / 6.0 / pow(dist, iGlowSharpness);
     }
@@ -79,12 +83,11 @@ void main() {
             break;
 
         case 'kaleidoscope':
-            // Kaleidoscope - symmetrical mandala patterns
             loopCode = `
     for (float i = 0.0; i < iIterations; i++) {
-        vec2 v = abs(p); // Force symmetry
+        vec2 v = abs(p);
         for (float f = 1.0; f < 10.0; f++) {
-            v = abs(v); // Maintain symmetry each iteration
+            v = abs(v);
             v += sin(v.yx * f + i + iResolution + t) / (f * iWarpStrength);
         }
         col += (cos(i + iColorPhase + vec4(0.0, 1.0, 2.0, 3.0)) + 1.0) / 6.0 / pow(length(v), iGlowSharpness);
@@ -93,14 +96,12 @@ void main() {
             break;
 
         case 'alien':
-            // Alien Biome - rainbow IQ palette
             loopCode = `
     for (float i = 0.0; i < iIterations; i++) {
         vec2 v = p;
         for (float f = 1.0; f < 10.0; f++) {
             v += sin(v.yx * f + i + iResolution + t) / (f * iWarpStrength);
         }
-        // IQ palette: a + b*cos(6.28318*(c*t+d))
         vec3 pal = 0.5 + 0.5 * cos(6.28318 * (0.5 * i + iColorPhase + vec3(0.0, 0.33, 0.67)));
         col.rgb += pal / pow(length(v), iGlowSharpness) / 6.0;
         col.a += 1.0 / pow(length(v), iGlowSharpness) / 6.0;
@@ -112,9 +113,9 @@ void main() {
             loopCode = loopCode || '';
     }
 
-    // Common footer with tone mapping
     const footer = `
-    fragColor = tanh(col * col);
+    vec4 result = tanh(col * col);
+    fragColor = vec4(result.rgb, 1.0);
 }
 `;
 
@@ -124,14 +125,17 @@ void main() {
 class ShaderPlayground {
     constructor() {
         this.canvas = document.getElementById('glCanvas');
-        this.gl = this.canvas.getContext('webgl2');
+        this.gl = this.canvas.getContext('webgl2', {
+            preserveDrawingBuffer: true,
+            alpha: false,
+            premultipliedAlpha: false
+        });
 
         if (!this.gl) {
             alert('WebGL2 is required but not supported.');
             return;
         }
 
-        // Default parameter values
         this.params = {
             variation: 'rocaille',
             speed: 1.0,
@@ -146,9 +150,18 @@ class ShaderPlayground {
         this.program = null;
         this.uniforms = {};
 
+        // Export state
+        this.isExporting = false;
+        this.capturer = null;
+        this.exportTime = 0;
+        this.exportDuration = 0;
+        this.exportFrameCount = 0;
+        this.currentFrame = 0;
+
         this.initGeometry();
         this.buildShader(this.params.variation);
         this.setupControls();
+        this.setupExport();
         this.resize();
         window.addEventListener('resize', () => this.resize());
         this.render();
@@ -156,8 +169,6 @@ class ShaderPlayground {
 
     initGeometry() {
         const gl = this.gl;
-
-        // Fullscreen quad (only needs to be done once)
         const positions = new Float32Array([
             -1, -1, 1, -1, -1, 1, 1, 1,
         ]);
@@ -170,12 +181,10 @@ class ShaderPlayground {
     buildShader(variation) {
         const gl = this.gl;
 
-        // Delete old program if exists
         if (this.program) {
             gl.deleteProgram(this.program);
         }
 
-        // Compile vertex shader
         const vertexShader = gl.createShader(gl.VERTEX_SHADER);
         gl.shaderSource(vertexShader, vertexShaderSource);
         gl.compileShader(vertexShader);
@@ -185,7 +194,6 @@ class ShaderPlayground {
             return;
         }
 
-        // Compile fragment shader for selected variation
         const fragmentSource = generateFragmentShader(variation);
         const fragmentShader = gl.createShader(gl.FRAGMENT_SHADER);
         gl.shaderSource(fragmentShader, fragmentSource);
@@ -193,11 +201,9 @@ class ShaderPlayground {
 
         if (!gl.getShaderParameter(fragmentShader, gl.COMPILE_STATUS)) {
             console.error('Fragment shader error:', gl.getShaderInfoLog(fragmentShader));
-            console.log('Source:', fragmentSource);
             return;
         }
 
-        // Link program
         this.program = gl.createProgram();
         gl.attachShader(this.program, vertexShader);
         gl.attachShader(this.program, fragmentShader);
@@ -210,13 +216,11 @@ class ShaderPlayground {
 
         gl.useProgram(this.program);
 
-        // Re-bind position attribute
         gl.bindBuffer(gl.ARRAY_BUFFER, this.positionBuffer);
         const aPosition = gl.getAttribLocation(this.program, 'aPosition');
         gl.enableVertexAttribArray(aPosition);
         gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);
 
-        // Cache uniform locations
         this.uniforms = {
             iResolution: gl.getUniformLocation(this.program, 'iResolution'),
             iTime: gl.getUniformLocation(this.program, 'iTime'),
@@ -227,19 +231,15 @@ class ShaderPlayground {
             iColorPhase: gl.getUniformLocation(this.program, 'iColorPhase'),
             iIterations: gl.getUniformLocation(this.program, 'iIterations'),
         };
-
-        console.log(`Shader variation "${variation}" compiled successfully.`);
     }
 
     setupControls() {
-        // Variation dropdown - triggers shader recompile
         const variationSelect = document.getElementById('variation');
         variationSelect.addEventListener('change', (e) => {
             this.params.variation = e.target.value;
             this.buildShader(this.params.variation);
         });
 
-        // All sliders - just update params
         const sliders = {
             speed: 'speed',
             zoom: 'zoom',
@@ -259,6 +259,121 @@ class ShaderPlayground {
         }
     }
 
+    setupExport() {
+        const recordBtn = document.getElementById('recordBtn');
+        const recordText = recordBtn.querySelector('.record-text');
+        const recordInfo = document.getElementById('recordInfo');
+
+        recordBtn.addEventListener('click', () => {
+            if (this.isExporting) return;
+            this.startExport(recordBtn, recordText, recordInfo);
+        });
+    }
+
+    /**
+     * Calculate the loop duration based on speed.
+     * Loop period = 2π / speed (because sin has period 2π)
+     */
+    getLoopDuration() {
+        return (2 * Math.PI) / this.params.speed;
+    }
+
+    startExport(button, textEl, infoEl) {
+        const fps = 60;
+        const loopDuration = this.getLoopDuration();
+        this.exportFrameCount = Math.ceil(loopDuration * fps);
+        this.exportDuration = loopDuration;
+        this.currentFrame = 0;
+        this.exportTime = 0;
+
+        // Update UI
+        this.isExporting = true;
+        button.classList.add('recording');
+        button.disabled = true;
+        textEl.textContent = 'Exporting...';
+        infoEl.textContent = `0 / ${this.exportFrameCount} frames`;
+        infoEl.classList.add('active');
+
+        // Initialize CCapture
+        this.capturer = new CCapture({
+            format: 'webm',
+            framerate: fps,
+            quality: 100,
+            name: `shader_${this.params.variation}_${Date.now()}`,
+            verbose: false
+        });
+
+        this.capturer.start();
+
+        // Start export render loop
+        this.exportRender(button, textEl, infoEl);
+    }
+
+    exportRender(button, textEl, infoEl) {
+        if (this.currentFrame >= this.exportFrameCount) {
+            this.finishExport(button, textEl, infoEl);
+            return;
+        }
+
+        const gl = this.gl;
+
+        // Calculate time for this frame using real-time progression
+        // This ensures the speed parameter affects visual animation speed in the video
+        const fps = 60;
+        const frameTime = this.currentFrame / fps;
+
+        // Clear to black and render frame at exact time
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.uniform2f(this.uniforms.iResolution, this.canvas.width, this.canvas.height);
+        gl.uniform1f(this.uniforms.iTime, frameTime);
+        gl.uniform1f(this.uniforms.iSpeed, this.params.speed);
+        gl.uniform1f(this.uniforms.iZoom, this.params.zoom);
+        gl.uniform1f(this.uniforms.iWarpStrength, this.params.warpStrength);
+        gl.uniform1f(this.uniforms.iGlowSharpness, this.params.glowSharpness);
+        gl.uniform1f(this.uniforms.iColorPhase, this.params.colorPhase);
+        gl.uniform1f(this.uniforms.iIterations, this.params.iterations);
+
+        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+        // Capture frame
+        this.capturer.capture(this.canvas);
+
+        this.currentFrame++;
+
+        // Update progress
+        const progress = Math.round((this.currentFrame / this.exportFrameCount) * 100);
+        textEl.textContent = `Exporting ${progress}%`;
+        infoEl.textContent = `${this.currentFrame} / ${this.exportFrameCount} frames`;
+
+        // Continue on next frame
+        requestAnimationFrame(() => this.exportRender(button, textEl, infoEl));
+    }
+
+    finishExport(button, textEl, infoEl) {
+        textEl.textContent = 'Saving...';
+
+        this.capturer.stop();
+        this.capturer.save();
+
+        // Reset state
+        setTimeout(() => {
+            this.isExporting = false;
+            button.classList.remove('recording');
+            button.disabled = false;
+            textEl.textContent = 'Export Video';
+            infoEl.textContent = 'Download complete!';
+            infoEl.classList.remove('active');
+
+            // Reset animation time
+            this.startTime = performance.now();
+
+            setTimeout(() => {
+                infoEl.textContent = '';
+            }, 3000);
+        }, 500);
+    }
+
     resize() {
         const dpr = window.devicePixelRatio || 1;
         const width = window.innerWidth;
@@ -273,10 +388,19 @@ class ShaderPlayground {
     }
 
     render() {
+        // Skip normal render during export
+        if (this.isExporting) {
+            requestAnimationFrame(() => this.render());
+            return;
+        }
+
         const gl = this.gl;
         const time = (performance.now() - this.startTime) / 1000;
 
-        // Update all uniforms
+        // Clear to black before rendering
+        gl.clearColor(0.0, 0.0, 0.0, 1.0);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+
         gl.uniform2f(this.uniforms.iResolution, this.canvas.width, this.canvas.height);
         gl.uniform1f(this.uniforms.iTime, time);
         gl.uniform1f(this.uniforms.iSpeed, this.params.speed);
@@ -286,7 +410,6 @@ class ShaderPlayground {
         gl.uniform1f(this.uniforms.iColorPhase, this.params.colorPhase);
         gl.uniform1f(this.uniforms.iIterations, this.params.iterations);
 
-        // Draw fullscreen quad
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
         requestAnimationFrame(() => this.render());
