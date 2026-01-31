@@ -295,19 +295,22 @@ class ShaderPlayground {
         infoEl.textContent = `0 / ${this.exportFrameCount} frames`;
         infoEl.classList.add('active');
 
-        // Create a stream from the canvas with manual frame control
-        // The 0 framerate means we control when frames are captured
         const stream = this.canvas.captureStream(0);
         const track = stream.getVideoTracks()[0];
 
-        // Set up MediaRecorder
-        const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
-            ? 'video/webm;codecs=vp9'
-            : 'video/webm';
+        let mimeType = 'video/webm';
+        if (MediaRecorder.isTypeSupported('video/webm;codecs=vp9')) {
+            mimeType = 'video/webm;codecs=vp9';
+        } else if (MediaRecorder.isTypeSupported('video/webm;codecs=vp8')) {
+            mimeType = 'video/webm;codecs=vp8';
+        }
+
+        const pixelCount = this.canvas.width * this.canvas.height;
+        const targetBitrate = Math.max(50000000, pixelCount * 60 * 0.5);
 
         this.mediaRecorder = new MediaRecorder(stream, {
             mimeType,
-            videoBitsPerSecond: 8000000 // 8 Mbps for high quality
+            videoBitsPerSecond: targetBitrate
         });
 
         this.mediaRecorder.ondataavailable = (e) => {
@@ -329,16 +332,12 @@ class ShaderPlayground {
             this.isExporting = false;
         };
 
-        // Start recording
         this.mediaRecorder.start();
-
-        // Begin frame-by-frame capture
         this.captureFrames(track, textEl, infoEl);
     }
 
     captureFrames(track, textEl, infoEl) {
         if (this.currentFrame >= this.exportFrameCount) {
-            // Stop recording when all frames are captured
             this.mediaRecorder.stop();
             return;
         }
@@ -347,7 +346,6 @@ class ShaderPlayground {
         const fps = 60;
         const frameTime = this.currentFrame / fps;
 
-        // Render the frame
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.uniform2f(this.uniforms.iResolution, this.canvas.width, this.canvas.height);
@@ -361,10 +359,7 @@ class ShaderPlayground {
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
 
-        // Force GPU to complete rendering
         gl.finish();
-
-        // Request a frame capture from the stream
         track.requestFrame();
 
         this.currentFrame++;
@@ -373,12 +368,10 @@ class ShaderPlayground {
         textEl.textContent = `Recording ${progress}%`;
         infoEl.textContent = `${this.currentFrame} / ${this.exportFrameCount} frames`;
 
-        // Schedule next frame with a small delay to allow the encoder to process
         setTimeout(() => this.captureFrames(track, textEl, infoEl), 1000 / 60);
     }
 
     finishExport(button, textEl, infoEl) {
-        // Create the video blob and trigger download
         const blob = new Blob(this.recordedChunks, { type: 'video/webm' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -389,7 +382,6 @@ class ShaderPlayground {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
 
-        // Cleanup
         this.recordedChunks = [];
         this.isExporting = false;
         button.classList.remove('recording');
