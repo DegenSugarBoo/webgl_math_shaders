@@ -1,16 +1,3 @@
-/**
- * Interactive Shader Playground
- * Based on "Rocaille" shader by @XorDev
- * 
- * Loop Period Math:
- * The shader animation is driven by: sin(... + t) where t = iTime * iSpeed
- * Since sin() has period 2π, the animation loops when t increases by 2π
- * Therefore: loop_duration = 2π / speed seconds
- * 
- * This is consistent across all variations because they all use the same
- * time parameter 't' inside their sine functions.
- */
-
 const vertexShaderSource = `#version 300 es
 in vec4 aPosition;
 void main() {
@@ -18,9 +5,7 @@ void main() {
 }
 `;
 
-// Shader generator function - creates fragment shader for each variation
 function generateFragmentShader(variation) {
-    // Common header
     const header = `#version 300 es
 precision highp float;
 
@@ -41,8 +26,6 @@ void main() {
     float t = iTime * iSpeed;
 `;
 
-    // Variation-specific loop logic
-    // All variations use 't' in their sine functions, so loop period = 2π/speed
     let loopCode;
 
     switch (variation) {
@@ -150,7 +133,6 @@ class ShaderPlayground {
         this.program = null;
         this.uniforms = {};
 
-        // Export state
         this.isExporting = false;
         this.capturer = null;
         this.exportTime = 0;
@@ -234,6 +216,8 @@ class ShaderPlayground {
     }
 
     setupControls() {
+        this.setupToggle();
+
         const variationSelect = document.getElementById('variation');
         variationSelect.addEventListener('change', (e) => {
             this.params.variation = e.target.value;
@@ -259,6 +243,30 @@ class ShaderPlayground {
         }
     }
 
+    setupToggle() {
+        const controls = document.querySelector('.controls');
+        const toggleBtn = document.getElementById('toggleBtn');
+        const header = document.querySelector('.controls-header');
+
+        const isCollapsed = localStorage.getItem('controlsCollapsed') === 'true';
+        if (isCollapsed) {
+            controls.classList.add('collapsed');
+        }
+
+        toggleBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            controls.classList.toggle('collapsed');
+            localStorage.setItem('controlsCollapsed', controls.classList.contains('collapsed'));
+        });
+
+        header.addEventListener('click', (e) => {
+            if (e.target === header || e.target.classList.contains('controls-title')) {
+                controls.classList.toggle('collapsed');
+                localStorage.setItem('controlsCollapsed', controls.classList.contains('collapsed'));
+            }
+        });
+    }
+
     setupExport() {
         const recordBtn = document.getElementById('recordBtn');
         const recordText = recordBtn.querySelector('.record-text');
@@ -270,10 +278,6 @@ class ShaderPlayground {
         });
     }
 
-    /**
-     * Calculate the loop duration based on speed.
-     * Loop period = 2π / speed (because sin has period 2π)
-     */
     getLoopDuration() {
         return (2 * Math.PI) / this.params.speed;
     }
@@ -286,7 +290,6 @@ class ShaderPlayground {
         this.currentFrame = 0;
         this.exportTime = 0;
 
-        // Update UI
         this.isExporting = true;
         button.classList.add('recording');
         button.disabled = true;
@@ -294,7 +297,6 @@ class ShaderPlayground {
         infoEl.textContent = `0 / ${this.exportFrameCount} frames`;
         infoEl.classList.add('active');
 
-        // Initialize CCapture
         this.capturer = new CCapture({
             format: 'webm',
             framerate: fps,
@@ -304,8 +306,6 @@ class ShaderPlayground {
         });
 
         this.capturer.start();
-
-        // Start export render loop
         this.exportRender(button, textEl, infoEl);
     }
 
@@ -316,13 +316,9 @@ class ShaderPlayground {
         }
 
         const gl = this.gl;
-
-        // Calculate time for this frame using real-time progression
-        // This ensures the speed parameter affects visual animation speed in the video
         const fps = 60;
         const frameTime = this.currentFrame / fps;
 
-        // Clear to black and render frame at exact time
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
         gl.uniform2f(this.uniforms.iResolution, this.canvas.width, this.canvas.height);
@@ -335,18 +331,13 @@ class ShaderPlayground {
         gl.uniform1f(this.uniforms.iIterations, this.params.iterations);
 
         gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-
-        // Capture frame
         this.capturer.capture(this.canvas);
-
         this.currentFrame++;
 
-        // Update progress
         const progress = Math.round((this.currentFrame / this.exportFrameCount) * 100);
         textEl.textContent = `Exporting ${progress}%`;
         infoEl.textContent = `${this.currentFrame} / ${this.exportFrameCount} frames`;
 
-        // Continue on next frame
         requestAnimationFrame(() => this.exportRender(button, textEl, infoEl));
     }
 
@@ -356,7 +347,6 @@ class ShaderPlayground {
         this.capturer.stop();
         this.capturer.save();
 
-        // Reset state
         setTimeout(() => {
             this.isExporting = false;
             button.classList.remove('recording');
@@ -365,7 +355,6 @@ class ShaderPlayground {
             infoEl.textContent = 'Download complete!';
             infoEl.classList.remove('active');
 
-            // Reset animation time
             this.startTime = performance.now();
 
             setTimeout(() => {
@@ -388,7 +377,6 @@ class ShaderPlayground {
     }
 
     render() {
-        // Skip normal render during export
         if (this.isExporting) {
             requestAnimationFrame(() => this.render());
             return;
@@ -397,7 +385,6 @@ class ShaderPlayground {
         const gl = this.gl;
         const time = (performance.now() - this.startTime) / 1000;
 
-        // Clear to black before rendering
         gl.clearColor(0.0, 0.0, 0.0, 1.0);
         gl.clear(gl.COLOR_BUFFER_BIT);
 
@@ -416,7 +403,6 @@ class ShaderPlayground {
     }
 }
 
-// Initialize
 window.addEventListener('DOMContentLoaded', () => {
     new ShaderPlayground();
 });
