@@ -66,6 +66,16 @@
                     <input type="range" id="iterations" min="3" max="15" step="1" value="10">
                 </div>
 
+                <div class="control-group">
+                    <label for="exportQuality">Export Quality</label>
+                    <select id="exportQuality">
+                        <option value="25">Standard (25 Mbps)</option>
+                        <option value="50" selected>High (50 Mbps)</option>
+                        <option value="100">Ultra (100 Mbps)</option>
+                        <option value="200">Maximum (200 Mbps)</option>
+                    </select>
+                </div>
+
                 <button id="recordBtn" class="record-button">
                     <span class="record-icon"></span>
                     <span class="record-text">Export Video</span>

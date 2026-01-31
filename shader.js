@@ -305,8 +305,9 @@ class ShaderPlayground {
             mimeType = 'video/webm;codecs=vp8';
         }
 
-        const pixelCount = this.canvas.width * this.canvas.height;
-        const targetBitrate = Math.max(50000000, pixelCount * 60 * 0.5);
+        const qualitySelect = document.getElementById('exportQuality');
+        const selectedMbps = parseInt(qualitySelect.value, 10);
+        const targetBitrate = selectedMbps * 1000000;
 
         this.mediaRecorder = new MediaRecorder(stream, {
             mimeType,
