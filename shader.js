@@ -134,9 +134,8 @@ class ShaderPlayground {
         this.uniforms = {};
 
         this.isExporting = false;
-        this.capturer = null;
-        this.exportTime = 0;
-        this.exportDuration = 0;
+        this.ffmpeg = null;
+        this.frames = [];
         this.exportFrameCount = 0;
         this.currentFrame = 0;
 
@@ -282,85 +281,184 @@ class ShaderPlayground {
         return (2 * Math.PI) / this.params.speed;
     }
 
-    startExport(button, textEl, infoEl) {
+    async loadFFmpeg() {
+        if (this.ffmpeg) return this.ffmpeg;
+
+        // Dynamically import ffmpeg.wasm
+        const { FFmpeg } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/ffmpeg@0.12.10/+esm');
+        const { fetchFile } = await import('https://cdn.jsdelivr.net/npm/@ffmpeg/util@0.12.1/+esm');
+
+        this.ffmpeg = new FFmpeg();
+        this.fetchFile = fetchFile;
+
+        // Load ffmpeg core
+        await this.ffmpeg.load({
+            coreURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.js',
+            wasmURL: 'https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm/ffmpeg-core.wasm',
+        });
+
+        return this.ffmpeg;
+    }
+
+    async startExport(button, textEl, infoEl) {
         const fps = 60;
         const loopDuration = this.getLoopDuration();
         this.exportFrameCount = Math.ceil(loopDuration * fps);
-        this.exportDuration = loopDuration;
         this.currentFrame = 0;
-        this.exportTime = 0;
+        this.frames = [];
 
         this.isExporting = true;
         button.classList.add('recording');
         button.disabled = true;
-        textEl.textContent = 'Exporting...';
-        infoEl.textContent = `0 / ${this.exportFrameCount} frames`;
+        textEl.textContent = 'Loading encoder...';
+        infoEl.textContent = 'Initializing ffmpeg.wasm';
         infoEl.classList.add('active');
 
-        this.capturer = new CCapture({
-            format: 'webm',
-            framerate: fps,
-            quality: 100,
-            name: `shader_${this.params.variation}_${Date.now()}`,
-            verbose: false
-        });
+        try {
+            // Load ffmpeg if not already loaded
+            await this.loadFFmpeg();
 
-        this.capturer.start();
-        this.exportRender(button, textEl, infoEl);
+            textEl.textContent = 'Capturing frames...';
+            infoEl.textContent = `0 / ${this.exportFrameCount} frames`;
+
+            // Capture all frames
+            await this.captureFrames(textEl, infoEl);
+
+            // Encode with ffmpeg
+            textEl.textContent = 'Encoding video...';
+            infoEl.textContent = 'Processing with ffmpeg';
+            await this.encodeVideo(textEl, infoEl);
+
+            // Cleanup and finish
+            this.finishExport(button, textEl, infoEl);
+        } catch (error) {
+            console.error('Export failed:', error);
+            textEl.textContent = 'Export failed';
+            infoEl.textContent = error.message;
+            button.disabled = false;
+            button.classList.remove('recording');
+            this.isExporting = false;
+
+            setTimeout(() => {
+                textEl.textContent = 'Export Video';
+                infoEl.textContent = '';
+                infoEl.classList.remove('active');
+            }, 3000);
+        }
     }
 
-    exportRender(button, textEl, infoEl) {
-        if (this.currentFrame >= this.exportFrameCount) {
-            this.finishExport(button, textEl, infoEl);
-            return;
+    captureFrames(textEl, infoEl) {
+        return new Promise((resolve) => {
+            const captureNext = () => {
+                if (this.currentFrame >= this.exportFrameCount) {
+                    resolve();
+                    return;
+                }
+
+                const gl = this.gl;
+                const fps = 60;
+                const frameTime = this.currentFrame / fps;
+
+                gl.clearColor(0.0, 0.0, 0.0, 1.0);
+                gl.clear(gl.COLOR_BUFFER_BIT);
+                gl.uniform2f(this.uniforms.iResolution, this.canvas.width, this.canvas.height);
+                gl.uniform1f(this.uniforms.iTime, frameTime);
+                gl.uniform1f(this.uniforms.iSpeed, this.params.speed);
+                gl.uniform1f(this.uniforms.iZoom, this.params.zoom);
+                gl.uniform1f(this.uniforms.iWarpStrength, this.params.warpStrength);
+                gl.uniform1f(this.uniforms.iGlowSharpness, this.params.glowSharpness);
+                gl.uniform1f(this.uniforms.iColorPhase, this.params.colorPhase);
+                gl.uniform1f(this.uniforms.iIterations, this.params.iterations);
+
+                gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+                // Force GPU to complete rendering
+                gl.finish();
+
+                // Capture frame as blob
+                this.canvas.toBlob((blob) => {
+                    this.frames.push(blob);
+                    this.currentFrame++;
+
+                    const progress = Math.round((this.currentFrame / this.exportFrameCount) * 100);
+                    textEl.textContent = `Capturing ${progress}%`;
+                    infoEl.textContent = `${this.currentFrame} / ${this.exportFrameCount} frames`;
+
+                    // Use setTimeout to allow UI updates
+                    setTimeout(captureNext, 0);
+                }, 'image/png');
+            };
+
+            captureNext();
+        });
+    }
+
+    async encodeVideo(textEl, infoEl) {
+        const ffmpeg = this.ffmpeg;
+
+        // Write all frames to ffmpeg's virtual filesystem
+        for (let i = 0; i < this.frames.length; i++) {
+            const frameData = await this.frames[i].arrayBuffer();
+            const fileName = `frame${String(i).padStart(5, '0')}.png`;
+            await ffmpeg.writeFile(fileName, new Uint8Array(frameData));
+
+            if (i % 10 === 0) {
+                const progress = Math.round((i / this.frames.length) * 50);
+                infoEl.textContent = `Writing frames: ${progress}%`;
+            }
         }
 
-        const gl = this.gl;
-        const fps = 60;
-        const frameTime = this.currentFrame / fps;
+        infoEl.textContent = 'Encoding MP4...';
 
-        gl.clearColor(0.0, 0.0, 0.0, 1.0);
-        gl.clear(gl.COLOR_BUFFER_BIT);
-        gl.uniform2f(this.uniforms.iResolution, this.canvas.width, this.canvas.height);
-        gl.uniform1f(this.uniforms.iTime, frameTime);
-        gl.uniform1f(this.uniforms.iSpeed, this.params.speed);
-        gl.uniform1f(this.uniforms.iZoom, this.params.zoom);
-        gl.uniform1f(this.uniforms.iWarpStrength, this.params.warpStrength);
-        gl.uniform1f(this.uniforms.iGlowSharpness, this.params.glowSharpness);
-        gl.uniform1f(this.uniforms.iColorPhase, this.params.colorPhase);
-        gl.uniform1f(this.uniforms.iIterations, this.params.iterations);
+        // Run ffmpeg to create video
+        await ffmpeg.exec([
+            '-framerate', '60',
+            '-i', 'frame%05d.png',
+            '-c:v', 'libx264',
+            '-pix_fmt', 'yuv420p',
+            '-preset', 'fast',
+            '-crf', '18',
+            'output.mp4'
+        ]);
 
-        gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
-        this.capturer.capture(this.canvas);
-        this.currentFrame++;
+        // Read the output file
+        const data = await ffmpeg.readFile('output.mp4');
 
-        const progress = Math.round((this.currentFrame / this.exportFrameCount) * 100);
-        textEl.textContent = `Exporting ${progress}%`;
-        infoEl.textContent = `${this.currentFrame} / ${this.exportFrameCount} frames`;
+        // Create download link
+        const blob = new Blob([data.buffer], { type: 'video/mp4' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `shader_${this.params.variation}_${Date.now()}.mp4`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
 
-        requestAnimationFrame(() => this.exportRender(button, textEl, infoEl));
+        // Cleanup ffmpeg virtual filesystem
+        for (let i = 0; i < this.frames.length; i++) {
+            const fileName = `frame${String(i).padStart(5, '0')}.png`;
+            await ffmpeg.deleteFile(fileName);
+        }
+        await ffmpeg.deleteFile('output.mp4');
+
+        // Clear frames from memory
+        this.frames = [];
     }
 
     finishExport(button, textEl, infoEl) {
-        textEl.textContent = 'Saving...';
+        this.isExporting = false;
+        button.classList.remove('recording');
+        button.disabled = false;
+        textEl.textContent = 'Export Video';
+        infoEl.textContent = 'Download complete!';
 
-        this.capturer.stop();
-        this.capturer.save();
+        this.startTime = performance.now();
 
         setTimeout(() => {
-            this.isExporting = false;
-            button.classList.remove('recording');
-            button.disabled = false;
-            textEl.textContent = 'Export Video';
-            infoEl.textContent = 'Download complete!';
+            infoEl.textContent = '';
             infoEl.classList.remove('active');
-
-            this.startTime = performance.now();
-
-            setTimeout(() => {
-                infoEl.textContent = '';
-            }, 3000);
-        }, 500);
+        }, 3000);
     }
 
     resize() {
